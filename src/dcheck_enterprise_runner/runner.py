@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from dcheck_enterprise_runner.io import append_jsonl, ensure_dir, write_json
+from dcheck_enterprise_runner.io import ensure_dir, read_jsonl, write_json, write_jsonl_overwrite
 from dcheck_enterprise_runner.planner import build_plan
 from dcheck_enterprise_runner.redaction import redact_report_payload
 from dcheck_enterprise_runner.spec import EnterpriseSpec
-
 
 _SCHEMA_VERSION = "dcheck-enterprise-run-report/v1"
 
@@ -58,11 +56,25 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
     if limit is not None:
         jobs = jobs[:limit]
 
+    # Load state events (resume) or start fresh. Avoid append due to UC Volumes limitations.
+    state_events: List[Dict[str, Any]] = read_jsonl(state_path) if resume else []
+
+    def emit_state(event: Dict[str, Any]) -> None:
+        """
+        UC Volumes-safe state writing: keep events in memory and overwrite JSONL each time.
+        Best-effort: state logging should not crash the run.
+        """
+        try:
+            state_events.append(event)
+            write_jsonl_overwrite(state_path, state_events)
+        except Exception:
+            # Do not crash the entire run if state logging fails
+            pass
+
     completed = set()
-    if resume and state_path.exists():
-        for line in state_path.read_text(encoding="utf-8").splitlines():
+    if resume:
+        for rec in state_events:
             try:
-                rec = __import__("json").loads(line)
                 if rec.get("status") == "completed":
                     completed.add(rec.get("table"))
             except Exception:
@@ -87,6 +99,16 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
         "table_results": [],  # list of small per-table summaries only
     }
 
+    # Ensure SparkSession exists in CLI subprocess (Databricks `!` runs in a separate process)
+    try:
+        from pyspark.sql import SparkSession  # type: ignore
+
+        _spark = SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+        _ = _spark  # keep reference to silence linters
+    except Exception:
+        # If Spark isn't available, dc() will fail later; keep behavior consistent.
+        pass
+
     # Import here to keep runner importable without Spark in unit tests
     from dcheck.api import dc  # type: ignore
 
@@ -95,11 +117,11 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
     for idx, job in enumerate(jobs, start=1):
         if job.name in completed:
             run_summary["tables_skipped"] += 1
-            append_jsonl(state_path, {"ts_utc": _utc_now(), "table": job.name, "status": "skipped", "reason": "resume"})
+            emit_state({"ts_utc": _utc_now(), "table": job.name, "status": "skipped", "reason": "resume"})
             continue
 
         started = time.time()
-        append_jsonl(state_path, {"ts_utc": _utc_now(), "table": job.name, "status": "started", "index": idx, "total": len(jobs)})
+        emit_state({"ts_utc": _utc_now(), "table": job.name, "status": "started", "index": idx, "total": len(jobs)})
 
         table_out = out_dir / "tables" / _safe_table_filename(job.name)
         ensure_dir(table_out.parent)
@@ -140,7 +162,7 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
                 }
             )
 
-            append_jsonl(state_path, {"ts_utc": _utc_now(), "table": job.name, "status": "completed", "failed": bool(failed)})
+            emit_state({"ts_utc": _utc_now(), "table": job.name, "status": "completed", "failed": bool(failed)})
 
             if failed:
                 run_summary["tables_failed"] += 1
@@ -151,10 +173,7 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
         except Exception as e:
             overall_failed = True
             run_summary["tables_failed"] += 1
-            append_jsonl(
-                state_path,
-                {"ts_utc": _utc_now(), "table": job.name, "status": "error", "error": f"{type(e).__name__}: {e}"},
-            )
+            emit_state({"ts_utc": _utc_now(), "table": job.name, "status": "error", "error": f"{type(e).__name__}: {e}"})
             run_summary["table_results"].append(
                 {
                     "table": job.name,
@@ -177,7 +196,9 @@ def run_from_spec(spec: EnterpriseSpec, audit: Dict[str, Any], resume: bool, lim
     return 1 if overall_failed else 0
 
 
-def _serialize_report(report_obj: Any, *, table_name: str, modules: List[str], config: Dict[str, Any], audit: Dict[str, Any]) -> Dict[str, Any]:
+def _serialize_report(
+    report_obj: Any, *, table_name: str, modules: List[str], config: Dict[str, Any], audit: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     Convert DCheck report object into a stable JSON payload.
     Works even if underlying report class changes, as long as it exposes common attributes.
