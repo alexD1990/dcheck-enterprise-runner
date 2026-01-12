@@ -51,7 +51,7 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     raw = path.read_text(encoding="utf-8")
     obj = yaml.safe_load(raw)
     if not isinstance(obj, dict):
-        raise SpecError(f"{path}: YAML root must be a mapping/object")
+        raise SpecError(f"{path}: YAML root must be an object (got {type(obj).__name__})")
     return obj
 
 

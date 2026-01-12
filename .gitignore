@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / build artifacts
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Pytest
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Logs / temp
+*.log
+*.tmp
+
+# Databricks local artifacts (safety)
+.dbx/

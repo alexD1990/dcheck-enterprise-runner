@@ -1,0 +1,17 @@
+run:
+  id: "demo-run-2026-01-12"
+  output_path: "./out"
+  fail_on: ["error"]
+  continue_on_error: true
+  allow_pii_output: false
+
+tables:
+  - name: "catalog.schema.table1"
+    modules: ["core_quality", "gdpr"]
+    config:
+      gdpr:
+        scan:
+          sample_rows: 5000
+
+  - name: "catalog.schema.table2"
+    modules: ["gdpr"]
