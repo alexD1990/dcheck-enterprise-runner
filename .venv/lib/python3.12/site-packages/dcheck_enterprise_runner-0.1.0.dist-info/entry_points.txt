@@ -1,2 +1,0 @@
-[console_scripts]
-dcheck-enterprise-runner = dcheck_enterprise_runner.cli:main
