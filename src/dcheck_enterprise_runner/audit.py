@@ -40,3 +40,9 @@ def build_audit_metadata() -> Dict[str, Any]:
             "dcheck-enterprise-runner": _pkg_version("dcheck-enterprise-runner"),
         },
     }
+
+def collect_audit() -> Dict[str, Any]:
+    """
+    Backwards-compatible alias used by notebooks/examples.
+    """
+    return build_audit_metadata()
